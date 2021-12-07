@@ -7,19 +7,16 @@ import {
   IndexLocation,
 } from "@craftdocs/craft-extension-api";
 
-/* ---- ENSURE DEV MODE WORKS -----
-You can run this extension locally with `npm run dev` in order to have faster iteration cycles.
-When running this way, the craft object won't be available and JS exception will occur
-With this helper function you can ensure that no exceptions occur for craft api related calls.
-/* ---------------------------------*/
+// ptr feed types will be open sourced and importable soon
+type FeedItem = {
+  id: string;
+  date_published: string;
+  url: string;
+  content_text: string;
+  _ptr_sender_type: string;
+};
 
-/* ---------------------------------*/
-/* ---- DARK/LIGHT MODE ----------- */
-/* ---------------------------------*/
-
-/*
-According to tailwind documentation, see : https://tailwindcss.com/docs/dark-mode#toggling-dark-mode-manually
-*/
+// dark/light mode, see https://tailwindcss.com/docs/dark-mode#toggling-dark-mode-manually
 function initColorSchemeHandler() {
   craft.env.setListener((env) => {
     if (env.colorScheme === "dark") {
@@ -30,166 +27,135 @@ function initColorSchemeHandler() {
   });
 }
 
-/* ---------------------------------*/
-/* ------- RENDER STORIES --------- */
-/* ---------------------------------*/
-
-function renderStories(stories: Object[]) {
+function renderMessages(messages: FeedItem[]) {
   const articlesDiv = document.getElementById("articles");
   articlesDiv.innerHTML = "";
-  stories.forEach((element) => {
-    const htmlToInsert: Node = createHTMLForStory(element);
-    articlesDiv.appendChild(htmlToInsert);
-  });
+
+  if (messages && messages.length > 0) {
+    messages.forEach((feedItem: FeedItem) => {
+      const htmlToInsert: Node = createHTMLForFeedItem(feedItem);
+      articlesDiv.appendChild(htmlToInsert);
+    });
+  }
 }
 
-function createHTMLForStory(story: Object): Node {
-  let numberOfCommens = 0;
-  if (story["kids"] != undefined) {
-    numberOfCommens = story["kids"].length;
-  }
-  const storyUrl: string = story["url"];
-  const id: string = story["id"];
-  const discusssionUrl: string = `https://news.ycombinator.com/item?id=${id}`;
+function createHTMLForFeedItem(feedItem: FeedItem): Node {
   const htmlString: string = `
-  <div class="gridItem">
-    <h3 class="text-sm font-medium select-none">
-      ${story["title"]}
-    </h3>
-    ${
-      story["url"] != null
-        ? `<div>
-      <a href= "" onclick = "window.openURL('${storyUrl}'); return false;" class="underline text-sm text-secondaryText dark:text-secondaryText-dark" >
-        ${new URL(story["url"]).hostname}
-      </a>
-    </div>`
-        : ""
-    }
-    <div>
-      <a href="" onclick="window.openURL('${discusssionUrl}'); return false;" class="text-xs text-secondaryText dark:text-secondaryText-dark">
-        ${story["by"]} | ${story["score"]} points | ${numberOfCommens} comments
-      </a>
+  <div class="gridItem" data-ptr-text="${`${feedItem.content_text}`}" data-ptr-id="${`${feedItem.id}`}">
+    <div class="text-sm font-medium select-none" id="text">
+      ${feedItem?.content_text?.substring(0, 200)}
     </div>
   </div>`;
   return new DOMParser().parseFromString(htmlString, "text/html").body
     .childNodes[0];
 }
 
-let loadedStoryDetails: Object[] = [];
-/* ---------------------------------*/
-/* -------- Click Handler---------- */
-/* ---------------------------------*/
+function updateMessage(messageId, newStatus) {
+  fetch(
+    `https://app.phonetonote.com/feed/${messageId}.json?roam_key=${
+      (document.getElementById("ptr-roam-key") as HTMLInputElement).value
+    }`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-type": "application/json; charset=UTF-8",
+      },
+      body: JSON.stringify({
+        status: newStatus,
+      }),
+    }
+  ).then((res) => res.json());
+}
 
-function initInsertButtonHandler() {
+type ErrorMessage = {
+  message: string;
+};
+
+async function loadMessages(): Promise<[FeedItem[], ErrorMessage]> {
+  let items = [];
+  let error = {} as ErrorMessage;
+
+  try {
+    const data = await fetch(
+      `https://app.phonetonote.com/feed.json?roam_key=${
+        (document.getElementById("ptr-roam-key") as HTMLInputElement).value
+      }`
+    ).then((res) => res.json());
+
+    if (data.error) {
+      error.message = data.error;
+    }
+
+    items = data.items;
+  } catch (err) {
+    error.message = err.message;
+  } finally {
+    return [items, error];
+  }
+}
+
+async function loadAndRenderMessages(showAlert) {
+  const [loadedMessages, errorMessage] = await loadMessages();
+
+  if (errorMessage.message) {
+    alert(errorMessage.message);
+  } else {
+    renderMessages(loadedMessages);
+  }
+
+  renderMessages(loadedMessages);
+  document.getElementById("spinner").style.visibility = "hidden";
+  document.getElementById("spinner").style.display = "none";
+
+  if (loadedMessages.length > 0) {
+    document.getElementById("footer").style.display = "block";
+  } else if (showAlert && !errorMessage.message) {
+    alert("no messages found");
+  }
+}
+
+function initButtonHandler() {
   document.getElementById("insert_button").onclick = async () => {
-    console.log("Insert, " + loadStoryDetails.length);
-    const items = loadedStoryDetails.map((element) => {
-      let numberOfComments = 0;
-      if (element["kids"] != undefined) {
-        numberOfComments = element["kids"].length;
-      }
-      const discusssionUrl: string = `https://news.ycombinator.com/item?id=${element["id"]}`;
-      const articleUrl = element["url"];
-      const content: CraftTextRun[] =
-        articleUrl != null
-          ? [
-              { text: element["title"], isBold: true },
-              { text: "\n" },
-              {
-                text: new URL(element["url"]).hostname,
-                isCode: true,
-                link: { url: element["url"], type: "url" },
-              },
-              { text: " " },
-              {
-                text: `↑ ${element["score"]}`,
-                isCode: true,
-                link: { url: discusssionUrl, type: "url" },
-              },
-            ]
-          : [
-              { text: element["title"], isBold: true },
-              { text: "\n" },
-              { text: " " },
-              {
-                text: `↑ ${element["score"]}`,
-                isCode: true,
-                link: { url: discusssionUrl, type: "url" },
-              },
-            ];
+    const items = [];
+    const articles = [].slice.call(
+      document.getElementById("articles").children
+    );
+    for (var i = 0; i < articles.length; i++) {
+      const element = articles[i];
+      updateMessage(element?.dataset?.ptrId, "syncing");
+
+      const content: CraftTextRun[] = [
+        { text: element?.dataset?.ptrText, isBold: true },
+      ];
 
       const branchBlock = craft.blockFactory.textBlock({
         content,
         listStyle: { type: "numbered" },
       });
-      return branchBlock;
+      items.push(branchBlock);
+    }
+
+    await craft.dataApi.addBlocks(items).then(() => {
+      // not great to have to reiterate over these, could try to redo this to add the blocks one at a time
+      // so we could mark them as published in the same go
+      for (var i = 0; i < articles.length; i++) {
+        const element = articles[i];
+        updateMessage(element?.dataset?.ptrId, "synced");
+      }
+
+      loadAndRenderMessages(false);
     });
-    await craft.dataApi.addBlocks(items);
   };
-}
 
-/* ---------------------------------*/
-/* ----------- HN API ------------- */
-/* ---------------------------------*/
-
-async function loadTopStoryIds(): Promise<string[]> {
-  let ids: string[] = [];
-  try {
-    const data = await fetch(
-      "https://hacker-news.firebaseio.com/v0/topstories.json"
-    ).then((res) => res.json());
-    ids = data;
-  } catch (err) {
-    console.error(err);
-  }
-  /* We want to get the top 10 stories, but there might be jobs or other inside  - so load more */
-  let top10ids: string[] = ids.slice(0, 20);
-  return top10ids;
-}
-
-async function loadStoryDetails(id: string): Promise<Object> {
-  let retData: Object = [];
-  try {
-    const data = await fetch(
-      `https://hacker-news.firebaseio.com/v0/item/${id}.json`
-    ).then((res) => res.json());
-    retData = data;
-  } catch (err) {
-    console.error(err);
-  }
-  return retData;
-}
-
-async function loadTop10StoryDetails(): Promise<Object[]> {
-  let ids = await loadTopStoryIds();
-  const promises = ids.map((storyId) => loadStoryDetails(storyId));
-  const storyDetails = await Promise.all(promises);
-  /* Filter for story types*/
-  let storyTypeStories = storyDetails.filter(
-    (story) => story["type"] == "story"
-  );
-  return storyTypeStories.slice(0, 10);
-}
-
-async function loadAndRenderStories() {
-  loadedStoryDetails = await loadTop10StoryDetails();
-  renderStories(loadedStoryDetails);
-  document.getElementById("spinner").style.visibility = "hidden";
-  document.getElementById("spinner").style.display = "none";
-  document.getElementById("footer").style.display = "block";
-}
-
-function addCustomWindowOpen() {
-  window["openURL"] = function (url) {
-    console.log("openURL");
-    craft.editorApi.openURL(url);
+  document.getElementById("enter-ptr-roam-key").onsubmit = async (e) => {
+    e.preventDefault();
+    loadAndRenderMessages(true);
   };
 }
 
 export function initApp() {
   initColorSchemeHandler();
-  initInsertButtonHandler();
-
-  addCustomWindowOpen();
-  loadAndRenderStories();
+  initButtonHandler();
+  document.getElementById("spinner").style.visibility = "hidden";
+  document.getElementById("spinner").style.display = "none";
 }
